@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Морской бой — по сети</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>⚓ Морской бой</h1>
+      <p class="subtitle">многопользовательская игра в реальном времени (WebSockets)</p>
+    </header>
+
+    <section id="connectPanel" class="panel">
+      <label for="nameInput">Ваше имя:</label>
+      <input id="nameInput" type="text" maxlength="20" placeholder="Игрок" autocomplete="off">
+      <button id="connectBtn">Подключиться</button>
+      <p id="connStatus" class="status muted">Не подключено</p>
+    </section>
+
+    <section id="gamePanel" class="panel hidden">
+      <div class="statusRow">
+        <div id="gameStatus" class="status"></div>
+        <button id="restartBtn" class="hidden">Играть ещё раз</button>
+      </div>
+
+      <div class="boards">
+        <div class="boardCol">
+          <h2 id="yourTitle">Ваше поле</h2>
+          <div id="yourBoard" class="board"></div>
+          <div class="shipInfo">Ваши корабли: <b id="yourShips">—</b></div>
+        </div>
+        <div class="boardCol">
+          <h2 id="enemyTitle">Поле противника</h2>
+          <div id="enemyBoard" class="board"></div>
+          <div class="shipInfo">Корабли противника: <b id="enemyShips">—</b></div>
+        </div>
+      </div>
+
+      <div class="logWrap">
+        <h3>Журнал боя</h3>
+        <div id="log" class="log"></div>
+      </div>
+    </section>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
