@@ -1,0 +1,13 @@
+{
+  "name": "sea-battle",
+  "version": "1.0.0",
+  "description": "Морской бой — многопользовательская веб-игра в реальном времени (WebSockets, без фреймворков)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
