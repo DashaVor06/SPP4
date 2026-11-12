@@ -124,11 +124,11 @@ function render() {
     restartBtn.classList.add('hidden');
   }
 
-  renderBoard(yourBoardEl, state.yourBoard, 'your', false, myTurn);
-  renderBoard(enemyBoardEl, state.enemyBoard, 'enemy', playing && myTurn, myTurn);
+  renderBoard(yourBoardEl, state.yourBoard, 'your', false);
+  renderBoard(enemyBoardEl, state.enemyBoard, 'enemy', playing && myTurn);
 }
 
-function renderBoard(container, cells, kind, clickable, myTurn) {
+function renderBoard(container, cells, kind, clickable) {
   container.innerHTML = '';
   container.classList.toggle('clickable', clickable);
 
@@ -155,12 +155,18 @@ function renderBoard(container, cells, kind, clickable, myTurn) {
       el.className = 'cell';
 
       if (kind === 'your') {
-        if (cell.ship) el.classList.add('ship');
-        if (cell.shot === 'hit') el.classList.add('hit');
-        else if (cell.shot === 'miss') el.classList.add('miss');
+        if (cell.sunk) {
+          el.classList.add('sunk'); // полностью потопленный корабль — синий
+        } else if (cell.ship) {
+          el.classList.add('ship'); // живой корабль — серый
+          if (cell.shot === 'hit') el.classList.add('hit'); // подбитая палуба — красный
+        }
+        if (!cell.ship && cell.shot === 'miss') el.classList.add('miss');
       } else {
-        if (cell.shot === 'hit') el.classList.add('hit');
+        if (cell.shot === 'sunk') el.classList.add('sunk');
+        else if (cell.shot === 'hit') el.classList.add('hit');
         else if (cell.shot === 'miss') el.classList.add('miss');
+        else if (cell.shot === 'halo') el.classList.add('halo');
         else if (clickable) {
           el.addEventListener('click', () => shoot(x, y));
         }

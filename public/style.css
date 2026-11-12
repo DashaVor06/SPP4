@@ -103,12 +103,13 @@ button:active { transform: translateY(1px); }
 }
 .cell.ship { background: var(--ship); }
 .cell.hit { background: var(--hit); }
-.cell.hit::after { content: '✕'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-weight: 800; color: #fff; }
+.cell.sunk { background: var(--hit); }
+.cell.sunk::after { content: '✕'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-weight: 800; color: #fff; }
 .cell.miss { background: var(--miss); }
-.cell.miss::after { content: '·'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 22px; color: #123; }
+.cell.halo { background: var(--miss); }
 
-.board.clickable .cell:not(.hit):not(.miss):not(.label) { cursor: crosshair; }
-.board.clickable .cell:not(.hit):not(.miss):not(.label):hover { background: #4a8ec2; }
+.board.clickable .cell:not(.hit):not(.miss):not(.sunk):not(.halo):not(.label) { cursor: crosshair; }
+.board.clickable .cell:not(.hit):not(.miss):not(.sunk):not(.halo):not(.label):hover { background: #4a8ec2; }
 
 .logWrap { margin-top: 22px; }
 .logWrap h3 { margin: 0 0 8px; }

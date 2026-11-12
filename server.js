@@ -176,18 +176,57 @@ function sendToGame(game, obj) {
 function viewFor(game, idx) {
   const me = game.players[idx];
   const opp = game.players[1 - idx];
+
+  // Множества потопленных кораблей (по id) для обоих игроков.
+  const sunkMe = new Set(me.ships.filter((s) => s.hits >= s.size).map((s) => s.id));
+  const sunkOpp = new Set(opp.ships.filter((s) => s.hits >= s.size).map((s) => s.id));
+
+  // Клетки-«ореолы» вокруг потопленных кораблей противника: по правилам игры
+  // рядом с кораблём не может быть другого корабля, поэтому эти клетки помечаются
+  // как заведомо пустые (по ним не нужно стрелять).
+  const haloOpp = new Set();
+  for (const s of opp.ships) {
+    if (!sunkOpp.has(s.id)) continue;
+    for (const [x, y] of s.cells) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx >= 0 && nx < SIZE && ny >= 0 && ny < SIZE) {
+            haloOpp.add(ny * SIZE + nx);
+          }
+        }
+      }
+    }
+  }
+
   const yourBoard = [];
   const enemyBoard = [];
   for (let y = 0; y < SIZE; y++) {
     const ra = [];
     const rb = [];
     for (let x = 0; x < SIZE; x++) {
-      ra.push({ ship: me.grid[y][x] !== null, shot: me.shots[y][x] });
-      rb.push({ shot: opp.shots[y][x] });
+      const myShipId = me.grid[y][x];
+      ra.push({
+        ship: myShipId !== null,
+        sunk: myShipId !== null && sunkMe.has(myShipId),
+        shot: me.shots[y][x],
+      });
+
+      const oppShot = opp.shots[y][x];
+      let shot = oppShot; // 'hit' | 'miss' | null
+      if (oppShot === 'hit') {
+        const oppShipId = opp.grid[y][x];
+        if (oppShipId !== null && sunkOpp.has(oppShipId)) shot = 'sunk';
+      } else if (oppShot === null && haloOpp.has(y * SIZE + x)) {
+        shot = 'halo';
+      }
+      rb.push({ shot });
     }
     yourBoard.push(ra);
     enemyBoard.push(rb);
   }
+
   return {
     type: 'state',
     status: game.status,
