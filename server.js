@@ -55,6 +55,7 @@ const USERNAME_PATTERN = new RegExp(
 // player: { id, token, name, ws, connected, grid, ships, shots }
 const state = { games: {} };
 
+// Восстанавливает сохранённые партии из games.json в память при старте сервера.
 function loadState() {
   try {
     const data = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'));
@@ -73,6 +74,7 @@ function loadState() {
   }
 }
 
+// Сериализует все партии в games.json (вызывается после каждого действия).
 function saveState() {
   const savable = {};
   for (const [id, g] of Object.entries(state.games)) {
@@ -110,6 +112,7 @@ const users = {};
 // authToken -> username (сессии живут в памяти; пользователи и результаты — на диске)
 const sessions = new Map();
 
+// Загружает пользователей и их результаты из users.json при старте.
 function loadUsers() {
   try {
     const data = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
@@ -120,6 +123,7 @@ function loadUsers() {
   }
 }
 
+// Сохраняет пользователей и их результаты в users.json.
 function saveUsers() {
   try {
     fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
@@ -133,17 +137,20 @@ function hashPassword(password, salt) {
   return crypto.scryptSync(String(password), salt, PASSWORD_KEY_BYTES).toString('hex');
 }
 
+// Создаёт токен сессии и связывает его с логином (хранится в памяти).
 function issueToken(username) {
   const token = (crypto.randomUUID && crypto.randomUUID()) || crypto.randomBytes(TOKEN_BYTES).toString('hex');
   sessions.set(token, username);
   return token;
 }
 
+// Формирует ответ auth: логин, свежий токен и таблицу результатов пользователя.
 function authPayload(username) {
   const u = users[username] || { results: [] };
   return { type: 'auth', ok: true, username, authToken: issueToken(username), results: u.results || [] };
 }
 
+// Обработчик регистрации: проверяет логин и пароль, создаёт аккаунт.
 function onRegister(ws, msg) {
   const username = String(msg.username || '').trim();
   const password = String(msg.password || '');
@@ -167,6 +174,7 @@ function onRegister(ws, msg) {
   ws.send(JSON.stringify(authPayload(username)));
 }
 
+// Обработчик входа: сверяет хеш введённого пароля с сохранённым.
 function onLogin(ws, msg) {
   const username = String(msg.username || '').trim();
   const password = String(msg.password || '');
@@ -186,6 +194,7 @@ function onLogin(ws, msg) {
   ws.send(JSON.stringify(authPayload(username)));
 }
 
+// Восстанавливает сессию по authToken (после перезагрузки страницы).
 function onRestore(ws, msg) {
   const username = sessions.get(msg.authToken);
   if (!username) {
@@ -195,10 +204,12 @@ function onRestore(ws, msg) {
   ws.send(JSON.stringify(authPayload(username)));
 }
 
+// Удаляет токен сессии из памяти (выход из аккаунта).
 function onLogout(ws, msg) {
   sessions.delete(msg.authToken);
 }
 
+// По запросу клиента отправляет ему его таблицу результатов.
 function onResults(ws, msg) {
   const username = sessions.get(msg.authToken);
   if (!username) {
@@ -208,6 +219,7 @@ function onResults(ws, msg) {
   sendResults(ws, username);
 }
 
+// Отправляет сообщение results с таблицей результатов конкретного пользователя.
 function sendResults(ws, username) {
   const u = users[username];
   ws.send(JSON.stringify({ type: 'results', results: (u && u.results) || [] }));
@@ -245,6 +257,7 @@ function broadcastResults(game) {
 // Логика «Морского боя»
 // ---------------------------------------------------------------------------
 
+// Генерирует случайную расстановку кораблей по правилам (корабли не касаются).
 function randomBoard() {
   // Сетка поля: каждая клетка хранит id корабля или null (пустая клетка).
   const grid = Array.from({ length: SIZE }, () => Array(SIZE).fill(null));
@@ -292,6 +305,7 @@ function randomBoard() {
   return { grid, ships };
 }
 
+// Заполняет игроку доску: случайная расстановка кораблей + пустая история выстрелов.
 function setupBoard(player) {
   const b = randomBoard();
   player.grid = b.grid;
@@ -299,14 +313,17 @@ function setupBoard(player) {
   player.shots = Array.from({ length: SIZE }, () => Array(SIZE).fill(null));
 }
 
+// Возвращает число ещё не потопленных кораблей игрока.
 function countShipsLeft(player) {
   return player.ships.filter((s) => s.hits < s.size).length;
 }
 
+// Преобразует координаты (x, y) в человекочитаемый вид, например «А5».
 function coords(x, y) {
   return `${LETTERS[x]}${y + 1}`;
 }
 
+// Ищет игрока по игровому токену по всем партиям; возвращает {game, idx} или null.
 function findPlayerByToken(token) {
   for (const g of Object.values(state.games)) {
     for (let i = 0; i < g.players.length; i++) {
@@ -316,6 +333,7 @@ function findPlayerByToken(token) {
   return null;
 }
 
+// Ищет игрока по его WebSocket-соединению; возвращает {game, idx} или null.
 function findPlayerByWs(ws) {
   for (const g of Object.values(state.games)) {
     for (let i = 0; i < g.players.length; i++) {
@@ -325,11 +343,13 @@ function findPlayerByWs(ws) {
   return null;
 }
 
+// Отправляет JSON-сообщение конкретному игроку партии (если он подключён).
 function sendToPlayer(game, idx, obj) {
   const p = game.players[idx];
   if (p && p.ws) p.ws.send(JSON.stringify(obj));
 }
 
+// Отправляет JSON-сообщение всем подключённым игрокам партии.
 function sendToGame(game, obj) {
   for (const p of game.players) if (p.ws) p.ws.send(JSON.stringify(obj));
 }
@@ -407,6 +427,7 @@ function viewFor(game, idx) {
   };
 }
 
+// Рассылает каждому игроку его персональное состояние партии.
 function sendAllState(game) {
   // В игре «ожидание» соперника ещё нет и доска не расставлена — слать состояние нечего.
   if (game.status === 'waiting' || game.players.length < 2) return;
@@ -421,6 +442,7 @@ function sendAllState(game) {
 // Обработчики сообщений от клиентов
 // ---------------------------------------------------------------------------
 
+// Обработчик входа в игру: переподключение по токену или подбор соперника.
 function onJoin(ws, msg) {
   const token = msg.token || null;
   const authUsername = (msg.authToken && sessions.get(msg.authToken)) || null;
@@ -502,6 +524,7 @@ function onJoin(ws, msg) {
   }
 }
 
+// Обработчик выстрела: валидирует ход, применяет его и рассылает результат.
 function onShoot(ws, msg) {
   const ref = findPlayerByWs(ws);
   if (!ref) return;
@@ -577,6 +600,7 @@ function onShoot(ws, msg) {
   if (game.status === 'finished') broadcastResults(game); // обновить таблицы результатов
 }
 
+// Перезапускает партию: новая расстановка кораблей и случайный первый ход.
 function onRestart(ws) {
   const ref = findPlayerByWs(ws);
   if (!ref) return;
@@ -664,6 +688,7 @@ const WS_MASK_KEY_BYTES = 4;     // размер ключа маски
 const WS_MAX_16BIT = 65536;      // 2^16 — граница 16-битной длины
 
 class WS {
+  // Создаёт WebSocket-обёртку над TCP-сокетом и подписывается на его события.
   constructor(socket) {
     this.socket = socket;
     this.buffer = Buffer.alloc(0);
@@ -678,12 +703,14 @@ class WS {
     socket.on('error', () => {});
   }
 
+  // Помечает соединение закрытым и вызывает onclose ровно один раз.
   _closed() {
     if (this._didClose) return;
     this._didClose = true;
     if (this.onclose) this.onclose();
   }
 
+  // Добавляет пришедший кусок данных в буфер и пытается разобрать кадры.
   _onData(chunk) {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     this._parse();
@@ -764,6 +791,7 @@ class WS {
     this.socket.write(Buffer.concat([header, payload]));
   }
 
+  // Отправляет текстовое сообщение (кадр opcode = text).
   send(text) {
     this._sendFrame(Buffer.from(text, 'utf8'), WS_OP_TEXT);
   }
@@ -783,6 +811,7 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+// HTTP-обработчик: раздаёт статические файлы из public/ (с защитой от выхода за каталог).
 const server = http.createServer((req, res) => {
   let urlPath;
   try {
@@ -812,6 +841,7 @@ const server = http.createServer((req, res) => {
   });
 });
 
+// Обработчик WebSocket-рукопожатия: отвечаем «101» и переключаемся на WebSocket.
 server.on('upgrade', (req, socket, head) => {
   if (!req.headers['sec-websocket-key']) {
     socket.destroy();

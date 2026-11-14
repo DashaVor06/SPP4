@@ -51,6 +51,7 @@ const resultsEmpty = $('resultsEmpty');
 
 nameInput.value = localStorage.getItem('bs_name') || '';
 
+// Устанавливает WebSocket-соединение и настраивает обработчики его событий.
 function connect() {
   clearTimeout(reconnectTimer);
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -80,19 +81,23 @@ function connect() {
   ws.onerror = () => {};
 }
 
+// Отправляет объект на сервер в виде JSON (только если соединение открыто).
 function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
 
+// Обновляет строку статуса соединения на странице.
 function setConnStatus(text) {
   connStatus.textContent = text;
   connStatus.classList.toggle('muted', false);
 }
 
+// Выводит сообщение об ошибке/успехе авторизации.
 function setAuthStatus(text) {
   authStatusEl.textContent = text;
 }
 
+// Отправляет join с именем и токеном; если сокет ещё не открыт — откладывает вход.
 function joinGame() {
   if (ws && ws.readyState === WebSocket.OPEN) {
     pendingJoin = false;
@@ -104,6 +109,7 @@ function joinGame() {
   }
 }
 
+// Переключает видимость формы входа и информации о вошедшем пользователе.
 function updateAuthUI() {
   const loggedIn = !!authUser;
   authForm.classList.toggle('hidden', loggedIn);
@@ -150,6 +156,7 @@ function renderResults(results) {
   });
 }
 
+// Обрабатывает входящие сообщения сервера (диспетчер по типу сообщения).
 function handle(msg) {
   switch (msg.type) {
     case 'auth':
@@ -296,6 +303,7 @@ function shoot(x, y) {
   send({ type: 'shoot', x, y });
 }
 
+// Добавляет строку в журнал боя и прокручивает его вниз.
 function addLog(text, win) {
   const div = document.createElement('div');
   if (win) div.className = 'win';
@@ -304,12 +312,15 @@ function addLog(text, win) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
+// Кнопка «Подключиться» — войти в игру (запустить подбор соперника).
 connectBtn.addEventListener('click', joinGame);
 
+// Кнопка «Играть ещё раз» — запросить новую партию.
 restartBtn.addEventListener('click', () => {
   send({ type: 'restart' });
 });
 
+// Кнопка «Войти» — отправить логин и пароль на сервер для входа.
 loginBtn.addEventListener('click', () => {
   const username = usernameInput.value.trim();
   const password = passwordInput.value;
@@ -317,6 +328,7 @@ loginBtn.addEventListener('click', () => {
   send({ type: 'login', username, password });
 });
 
+// Кнопка «Регистрация» — создать новый аккаунт.
 registerBtn.addEventListener('click', () => {
   const username = usernameInput.value.trim();
   const password = passwordInput.value;
@@ -324,13 +336,20 @@ registerBtn.addEventListener('click', () => {
   send({ type: 'register', username, password });
 });
 
+// Кнопка «Выйти» — завершить сессию и полностью сбросить данные (аккаунт + игра).
 logoutBtn.addEventListener('click', () => {
   if (authToken) send({ type: 'logout', authToken });
+  // Сбрасываем аккаунт.
   authToken = null;
   authUser = null;
   localStorage.removeItem('bs_auth');
   localStorage.removeItem('bs_user');
-  updateAuthUI();
+  // Сбрасываем и игровую сессию, иначе вкладка «вспомнит» старую партию и имя.
+  gameToken = null;
+  sessionStorage.removeItem('bs_token');
+  localStorage.removeItem('bs_name');
+  // Перезагрузка закрывает соединение (сервер отвяжет сокет) и начинает заново.
+  location.reload();
 });
 
 // Сразу отражаем сохранённый вход (если есть), затем подключаем WebSocket.
