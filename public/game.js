@@ -8,9 +8,8 @@ const RECONNECT_DELAY_MS = 2000; // задержка перед авто-пер�
 const MAX_RESULTS_SHOWN = 20;    // сколько последних записей показывать
 
 let ws = null;
-// Игровой токен — в sessionStorage (свой у каждой вкладки).
-let gameToken = sessionStorage.getItem('bs_token') || null;
-// Токен авторизации и логин — в localStorage (общие для всех вкладок).
+// Токен авторизации и логин — в localStorage (общие для всех вкладок,
+// переживают закрытие браузера). Партия привязана к аккаунту, а не к вкладке.
 let authToken = localStorage.getItem('bs_auth') || null;
 let authUser = localStorage.getItem('bs_user') || null;
 // Идентификатор браузера (общий для всех вкладок) — чтобы не играть с самим собой.
@@ -70,7 +69,7 @@ function connect() {
       restoringSession = true;
       send({ type: 'restore', authToken }); // восстановить сессию и результаты
     }
-    if (pendingJoin || gameToken) joinGame(); // автоподключение к игре
+    if (pendingJoin || authUser) joinGame(); // автоподключение к игре (если авторизован)
     updateAuthUI();
   };
 
@@ -106,22 +105,30 @@ function setAuthStatus(text) {
 
 // Отправляет join с именем и токеном; если сокет ещё не открыт — откладывает вход.
 function joinGame() {
+  // Игра доступна только после входа — гостей не пускаем.
+  if (!authUser) {
+    setAuthStatus('Войдите, чтобы играть.');
+    return;
+  }
   if (ws && ws.readyState === WebSocket.OPEN) {
     pendingJoin = false;
-    const name = authUser || nameInput.value.trim() || 'Игрок';
+    const name = authUser;
     localStorage.setItem('bs_name', name);
-    send({ type: 'join', name, token: gameToken, authToken, clientId });
+    send({ type: 'join', name, authToken, clientId });
   } else {
     pendingJoin = true;
   }
 }
 
-// Переключает видимость формы входа и информации о вошедшем пользователе.
+// Переключает видимость формы входа и игровых панелей в зависимости от входа.
 function updateAuthUI() {
   const loggedIn = !!authUser;
   authForm.classList.toggle('hidden', loggedIn);
   authInfo.classList.toggle('hidden', !loggedIn);
   resultsPanel.classList.toggle('hidden', !loggedIn);
+  // Пока пользователь не вошёл, скрываем панели игры (гостям игра недоступна).
+  connectPanel.classList.toggle('hidden', !loggedIn);
+  if (!loggedIn) gamePanel.classList.add('hidden');
   authUserEl.textContent = authUser || '';
   if (loggedIn) {
     nameInput.value = authUser;
@@ -193,9 +200,9 @@ function handle(msg) {
       renderResults(msg.results || []);
       break;
 
-    case 'joined':
-      gameToken = msg.token;
-      sessionStorage.setItem('bs_token', gameToken);
+    case 'info':
+      // Информационное сообщение (например, «игра уже запущена»).
+      setConnStatus(msg.message);
       break;
 
     case 'waiting':
@@ -343,19 +350,16 @@ registerBtn.addEventListener('click', () => {
   send({ type: 'register', username, password });
 });
 
-// Кнопка «Выйти» — завершить сессию и полностью сбросить данные (аккаунт + игра).
+// Кнопка «Выйти» — завершить сессию аккаунта и перезагрузить страницу.
 logoutBtn.addEventListener('click', () => {
   if (authToken) send({ type: 'logout', authToken });
-  // Сбрасываем аккаунт.
+  // Сбрасываем аккаунт и имя (браузер «забывает» пользователя).
   authToken = null;
   authUser = null;
   localStorage.removeItem('bs_auth');
   localStorage.removeItem('bs_user');
-  // Сбрасываем и игровую сессию, иначе вкладка «вспомнит» старую партию и имя.
-  gameToken = null;
-  sessionStorage.removeItem('bs_token');
   localStorage.removeItem('bs_name');
-  // Перезагрузка закрывает соединение (сервер отвяжет сокет) и начинает заново.
+  // Перезагрузка закрывает соединение (сервер отвяжет сокет от партии).
   location.reload();
 });
 

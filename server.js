@@ -323,11 +323,12 @@ function coords(x, y) {
   return `${LETTERS[x]}${y + 1}`;
 }
 
-// Ищет игрока по игровому токену по всем партиям; возвращает {game, idx} или null.
-function findPlayerByToken(token) {
+// Ищет действующую (ожидающую или идущую) партию пользователя по логину.
+function findActiveGameByUser(authUsername) {
   for (const g of Object.values(state.games)) {
+    if (g.status !== 'waiting' && g.status !== 'playing') continue;
     for (let i = 0; i < g.players.length; i++) {
-      if (g.players[i].token === token) return { game: g, idx: i };
+      if (g.players[i].authUsername === authUsername) return { game: g, idx: i };
     }
   }
   return null;
@@ -449,39 +450,43 @@ function sendAllState(game) {
 // Обработчики сообщений от клиентов
 // ---------------------------------------------------------------------------
 
-// Обработчик входа в игру: переподключение по токену или подбор соперника.
+// Обработчик входа в игру: восстановление действующей партии или подбор соперника.
 function onJoin(ws, msg) {
-  const token = msg.token || null;
   const authUsername = (msg.authToken && sessions.get(msg.authToken)) || null;
-  const clientId = msg.clientId || null; // id браузера — чтобы не играть с самим собой
-  // Игрок, прошедший авторизацию, выступает под своим логином.
-  const name = authUsername || String(msg.name || 'Игрок').slice(0, MAX_NAME_LENGTH) || 'Игрок';
+  const clientId = msg.clientId || null; // id браузера
 
-  // 1) Попытка восстановить игрока по токену (переподключение).
-  if (token) {
-    const ref = findPlayerByToken(token);
-    if (ref) {
-      const { game, idx } = ref;
-      const player = game.players[idx];
-      if (player.ws && player.ws !== ws) {
-        player.ws.onclose = null; // старый сокет больше не управляет состоянием
-        try { player.ws.socket.end(); } catch (e) {}
-      }
-      player.ws = ws;
-      player.connected = true;
-      if (authUsername) player.authUsername = authUsername;
-      if (msg.clientId) player.clientId = msg.clientId;
-      if (msg.name || authUsername) player.name = name;
-      ws.send(JSON.stringify({ type: 'joined', token: player.token, playerId: player.id }));
-      if (game.status === 'waiting') {
-        // соперник ещё не пришёл — снова ждём
-        ws.send(JSON.stringify({ type: 'waiting' }));
-      } else {
-        sendAllState(game);
-        sendToPlayer(game, 1 - idx, { type: 'event', text: `${player.name} снова в игре` });
-      }
+  // Игра доступна только авторизованным пользователям.
+  if (!authUsername) {
+    ws.send(JSON.stringify({ type: 'error', message: 'Войдите, чтобы играть.' }));
+    return;
+  }
+
+  // Авторизованный игрок выступает под своим логином.
+  const name = authUsername;
+
+  // 1) У пользователя одна действующая игра: если она уже есть — не создаём новую.
+  const active = findActiveGameByUser(authUsername);
+  if (active) {
+    const { game, idx } = active;
+    const player = game.players[idx];
+    // В партии уже есть живое соединение — значит, это вторая вкладка.
+    if (player.connected) {
+      ws.send(JSON.stringify({ type: 'info', message: 'Игра уже запущена под этим именем.' }));
       return;
     }
+    // Соединения нет (вкладку/браузер закрыли) — восстанавливаем партию.
+    player.ws = ws;
+    player.connected = true;
+    if (msg.clientId) player.clientId = msg.clientId;
+    ws.send(JSON.stringify({ type: 'joined', token: player.token, playerId: player.id }));
+    if (game.status === 'waiting') {
+      // соперник ещё не пришёл — снова ждём
+      ws.send(JSON.stringify({ type: 'waiting' }));
+    } else {
+      sendAllState(game);
+      sendToPlayer(game, 1 - idx, { type: 'event', text: `${player.name} снова в игре` });
+    }
+    return;
   }
 
   // 2) Новый игрок.
