@@ -3,6 +3,9 @@
 /* Клиент «Морского боя»: чистый JavaScript, без фреймворков. */
 
 const LETTERS = 'АБВГДЕЖИК'.split('');
+const BOARD_SIZE = 10;           // размер игрового поля (10×10)
+const RECONNECT_DELAY_MS = 2000; // задержка перед авто-переподключением
+const MAX_RESULTS_SHOWN = 20;    // сколько последних записей показывать
 
 let ws = null;
 // Игровой токен — в sessionStorage (свой у каждой вкладки).
@@ -71,7 +74,7 @@ function connect() {
 
   ws.onclose = () => {
     setConnStatus('Соединение потеряно. Переподключение…');
-    reconnectTimer = setTimeout(connect, 2000);
+    reconnectTimer = setTimeout(connect, RECONNECT_DELAY_MS);
   };
 
   ws.onerror = () => {};
@@ -115,8 +118,10 @@ function updateAuthUI() {
   }
 }
 
+// Заполняет таблицу результатов: сводка (всего/побед/поражений) + список партий.
 function renderResults(results) {
   resultsTableBody.innerHTML = '';
+  // Сыгранных партий ещё нет — показываем заглушку.
   if (!results || results.length === 0) {
     resultsSummary.innerHTML = '';
     resultsEmpty.classList.remove('hidden');
@@ -128,7 +133,8 @@ function renderResults(results) {
   resultsSummary.innerHTML =
     `Всего партий: <b>${results.length}</b> · Побед: <b>${wins}</b> · Поражений: <b>${losses}</b>`;
 
-  results.slice().reverse().slice(0, 20).forEach((r, i) => {
+  // Новые записи показываем сверху (reverse) и ограничиваем количество.
+  results.slice().reverse().slice(0, MAX_RESULTS_SHOWN).forEach((r, i) => {
     const tr = document.createElement('tr');
     const tdN = document.createElement('td');
     tdN.textContent = i + 1;
@@ -201,6 +207,7 @@ function handle(msg) {
   }
 }
 
+// Перерисовывает весь интерфейс по последнему состоянию, присланному сервером.
 function render() {
   if (!state) return;
 
@@ -230,32 +237,36 @@ function render() {
   renderBoard(enemyBoardEl, state.enemyBoard, 'enemy', playing && myTurn);
 }
 
+// Рисует одно поле 10×10 (своё или противника) в заданный контейнер.
+// kind: 'your' — своё поле (корабли видны), 'enemy' — поле противника (корабли скрыты).
 function renderBoard(container, cells, kind, clickable) {
+  // Очищаем контейнер и включаем/выключаем режим кликабельности клеток.
   container.innerHTML = '';
   container.classList.toggle('clickable', clickable);
 
-  // пустая угловая клетка + буквы столбцов
+  // Верхняя строка: пустой угол + буквы столбцов (А–К).
   const corner = document.createElement('div');
   corner.className = 'label';
   container.appendChild(corner);
-  for (let x = 0; x < 10; x++) {
+  for (let x = 0; x < BOARD_SIZE; x++) {
     const l = document.createElement('div');
     l.className = 'label';
     l.textContent = LETTERS[x];
     container.appendChild(l);
   }
 
-  for (let y = 0; y < 10; y++) {
+  for (let y = 0; y < BOARD_SIZE; y++) {
     const nl = document.createElement('div');
     nl.className = 'label';
     nl.textContent = y + 1;
     container.appendChild(nl);
 
-    for (let x = 0; x < 10; x++) {
+    for (let x = 0; x < BOARD_SIZE; x++) {
       const cell = cells[y][x];
       const el = document.createElement('div');
       el.className = 'cell';
 
+      // Назначаем CSS-классы в зависимости от состояния клетки.
       if (kind === 'your') {
         if (cell.sunk) {
           el.classList.add('sunk'); // полностью потопленный корабль
@@ -279,6 +290,7 @@ function renderBoard(container, cells, kind, clickable) {
   }
 }
 
+// Отправляет выстрел; корректность (чей ход, занята ли клетка) проверит сервер.
 function shoot(x, y) {
   if (!state || state.status !== 'playing' || state.turn !== myIndex) return;
   send({ type: 'shoot', x, y });

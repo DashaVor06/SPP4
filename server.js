@@ -32,6 +32,21 @@ const LETTERS = 'АБВГДЕЖЗИК'.split('');
 // 3 двухпалубных, 4 однопалубных.
 const SHIP_SIZES = [4, 3, 3, 2, 2, 2, 1, 1, 1, 1];
 
+// Общие ограничения
+const MAX_NAME_LENGTH = 20;      // максимальная длина имени игрока
+const PLACEMENT_ATTEMPTS = 1000; // попыток случайно расставить корабль
+
+// Авторизация
+const MIN_USERNAME_LENGTH = 3;   // минимальная длина логина
+const MAX_USERNAME_LENGTH = 20;  // максимальная длина логина
+const MIN_PASSWORD_LENGTH = 4;   // минимальная длина пароля
+const PASSWORD_KEY_BYTES = 64;   // длина scrypt-хеша пароля (байт)
+const SALT_BYTES = 16;           // длина соли (байт)
+const TOKEN_BYTES = 16;          // длина случайного токена (байт)
+const USERNAME_PATTERN = new RegExp(
+  `^[a-zA-Zа-яА-Я0-9_-]{${MIN_USERNAME_LENGTH},${MAX_USERNAME_LENGTH}}$`
+);
+
 // ---------------------------------------------------------------------------
 // Состояние и сохранение на диск
 // ---------------------------------------------------------------------------
@@ -115,11 +130,11 @@ function saveUsers() {
 
 // Хеширование пароля: scrypt с солью (встроенный модуль crypto).
 function hashPassword(password, salt) {
-  return crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return crypto.scryptSync(String(password), salt, PASSWORD_KEY_BYTES).toString('hex');
 }
 
 function issueToken(username) {
-  const token = (crypto.randomUUID && crypto.randomUUID()) || crypto.randomBytes(16).toString('hex');
+  const token = (crypto.randomUUID && crypto.randomUUID()) || crypto.randomBytes(TOKEN_BYTES).toString('hex');
   sessions.set(token, username);
   return token;
 }
@@ -132,19 +147,21 @@ function authPayload(username) {
 function onRegister(ws, msg) {
   const username = String(msg.username || '').trim();
   const password = String(msg.password || '');
-  if (!/^[a-zA-Zа-яА-Я0-9_-]{3,20}$/.test(username)) {
-    ws.send(JSON.stringify({ type: 'auth', ok: false, error: 'Логин: 3–20 символов (буквы, цифры, «_», «-»).' }));
+  if (!USERNAME_PATTERN.test(username)) {
+    ws.send(JSON.stringify({ type: 'auth', ok: false,
+      error: `Логин: ${MIN_USERNAME_LENGTH}–${MAX_USERNAME_LENGTH} символов (буквы, цифры, «_», «-»).` }));
     return;
   }
-  if (password.length < 4) {
-    ws.send(JSON.stringify({ type: 'auth', ok: false, error: 'Пароль должен быть не короче 4 символов.' }));
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    ws.send(JSON.stringify({ type: 'auth', ok: false,
+      error: `Пароль должен быть не короче ${MIN_PASSWORD_LENGTH} символов.` }));
     return;
   }
   if (users[username]) {
     ws.send(JSON.stringify({ type: 'auth', ok: false, error: 'Такой логин уже занят.' }));
     return;
   }
-  const salt = crypto.randomBytes(16).toString('hex');
+  const salt = crypto.randomBytes(SALT_BYTES).toString('hex');
   users[username] = { salt, hash: hashPassword(password, salt), results: [] };
   saveUsers();
   ws.send(JSON.stringify(authPayload(username)));
@@ -158,8 +175,10 @@ function onLogin(ws, msg) {
     ws.send(JSON.stringify({ type: 'auth', ok: false, error: 'Пользователь не найден.' }));
     return;
   }
+  // Хешируем введённый пароль с той же солью и сравниваем хеши.
   const expected = Buffer.from(u.hash, 'hex');
   const actual = Buffer.from(hashPassword(password, u.salt), 'hex');
+  // timingSafeEqual сравнивает за константное время (защита от атаки по времени).
   if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
     ws.send(JSON.stringify({ type: 'auth', ok: false, error: 'Неверный пароль.' }));
     return;
@@ -196,13 +215,16 @@ function sendResults(ws, username) {
 
 // Записывает результат завершённой партии в таблицы обоих игроков.
 function recordResult(game) {
+  // Ничья не предусмотрена: без победителя записывать нечего.
   if (game.winner === null) return;
+  // Добавляем запись в таблицу каждого авторизованного участника.
   for (let i = 0; i < game.players.length; i++) {
     const p = game.players[i];
-    if (!p.authUsername) continue; // играл как гость
+    if (!p.authUsername) continue; // гость играл без аккаунта — результат не сохраняем
     const u = users[p.authUsername];
     if (!u) continue;
     if (!u.results) u.results = [];
+    // Победителю — 'win', проигравшему — 'loss'.
     u.results.push({
       opponent: game.players[1 - i].name,
       result: i === game.winner ? 'win' : 'loss',
@@ -224,6 +246,7 @@ function broadcastResults(game) {
 // ---------------------------------------------------------------------------
 
 function randomBoard() {
+  // Сетка поля: каждая клетка хранит id корабля или null (пустая клетка).
   const grid = Array.from({ length: SIZE }, () => Array(SIZE).fill(null));
   const ships = [];
   let shipId = 0;
@@ -231,6 +254,7 @@ function randomBoard() {
   // Клетка свободна для нового корабля, если она сама и все 8 её соседей
   // не заняты другими кораблями (корабли не должны касаться даже углами).
   const cellFree = (x, y) => {
+    // Квадрат 3×3 вокруг клетки: dx и dy пробегают от -1 до 1 (включая саму клетку).
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         const nx = x + dx;
@@ -243,10 +267,13 @@ function randomBoard() {
     return true;
   };
 
+  // Ставим корабли по одному, от самого большого к самым маленьким.
   for (const size of SHIP_SIZES) {
     let placed = false;
-    for (let attempt = 0; attempt < 1000 && !placed; attempt++) {
-      const horizontal = Math.random() < 0.5;
+    // Несколько случайных попыток, пока не найдём место, где корабль помещается.
+    for (let attempt = 0; attempt < PLACEMENT_ATTEMPTS && !placed; attempt++) {
+      const horizontal = Math.random() < 0.5; // ориентация: горизонтально или вертикально
+      // Стартовая клетка с учётом, что корабль должен целиком влезть в поле.
       const x = Math.floor(Math.random() * (horizontal ? SIZE - size + 1 : SIZE));
       const y = Math.floor(Math.random() * (horizontal ? SIZE : SIZE - size + 1));
       const cells = [];
@@ -259,7 +286,8 @@ function randomBoard() {
         placed = true;
       }
     }
-    if (!placed) shipId++; // теоретически не случается на поле 10x10
+    // На поле 10×10 места всегда хватает; сдвигаем id, чтобы не было «дыр» в нумерации.
+    if (!placed) shipId++;
   }
   return { grid, ships };
 }
@@ -306,7 +334,9 @@ function sendToGame(game, obj) {
   for (const p of game.players) if (p.ws) p.ws.send(JSON.stringify(obj));
 }
 
-// Представление игры для конкретного игрока (без чужих кораблей).
+// Строит персональное представление партии для игрока idx.
+// Важно: на поле противника чужие корабли не раскрываются — видны только
+// результаты выстрелов (hit/miss/sunk) и «ореолы» потопленных кораблей.
 function viewFor(game, idx) {
   const me = game.players[idx];
   const opp = game.players[1 - idx];
@@ -395,7 +425,7 @@ function onJoin(ws, msg) {
   const token = msg.token || null;
   const authUsername = (msg.authToken && sessions.get(msg.authToken)) || null;
   // Игрок, прошедший авторизацию, выступает под своим логином.
-  const name = authUsername || String(msg.name || 'Игрок').slice(0, 20) || 'Игрок';
+  const name = authUsername || String(msg.name || 'Игрок').slice(0, MAX_NAME_LENGTH) || 'Игрок';
 
   // 1) Попытка восстановить игрока по токену (переподключение).
   if (token) {
@@ -499,33 +529,39 @@ function onShoot(ws, msg) {
     return;
   }
 
+  // Применяем выстрел к полю противника.
   const cell = opp.grid[y][x];
   let result;
   if (cell === null) {
+    // Мимо: в клетке пусто.
     opp.shots[y][x] = 'miss';
     result = 'miss';
   } else {
+    // Попадание: находим корабль по id и увеличиваем счётчик попаданий.
     opp.shots[y][x] = 'hit';
     const ship = opp.ships.find((s) => s.id === cell);
     ship.hits++;
+    // Все палубы подбиты — корабль потоплен.
     result = ship.hits >= ship.size ? 'sunk' : 'hit';
   }
 
+  // Формируем текст события для стрелявшего и для его соперника.
   let evShooter;
   let evOpp;
   if (result === 'miss') {
     evShooter = `Мимо (${coords(x, y)}).`;
     evOpp = `Противник промахнулся (${coords(x, y)}).`;
-    game.turn = 1 - idx; // промах — ход переходит
+    game.turn = 1 - idx; // промах — ход переходит сопернику
   } else if (result === 'hit') {
     evShooter = `Попадание (${coords(x, y)})!`;
     evOpp = `В ваш корабль попали (${coords(x, y)})!`;
-    // попадание — тот же игрок стреляет ещё раз
+    // Попадание — ход сохраняется, тот же игрок стреляет ещё раз.
   } else {
     evShooter = `Корабль потоплен (${coords(x, y)})!`;
     evOpp = `Ваш корабль потоплен (${coords(x, y)})!`;
   }
 
+  // Проверка победы: потоплены ли все корабли противника.
   if (opp.ships.every((s) => s.hits >= s.size)) {
     game.status = 'finished';
     game.winner = idx;
@@ -556,8 +592,10 @@ function onRestart(ws) {
   sendAllState(game);
 }
 
+// Точка входа для всех сообщений клиента: разбираем JSON и маршрутизируем по типу.
 function handleMessage(ws, raw) {
   let msg;
+  // Некорректный JSON (например, обрыв на середине кадра) просто игнорируем.
   try { msg = JSON.parse(raw); } catch (e) { return; }
   if (!msg || typeof msg !== 'object') return;
   switch (msg.type) {
@@ -573,11 +611,15 @@ function handleMessage(ws, raw) {
   }
 }
 
+// Вызывается при закрытии WebSocket-соединения.
 function handleDisconnect(ws) {
+  // Ищем, какому игроку принадлежал закрывшийся сокет.
   for (const g of Object.values(state.games)) {
     for (let i = 0; i < g.players.length; i++) {
       const p = g.players[i];
       if (p.ws === ws) {
+        // Помечаем игрока отключённым, но НЕ удаляем из партии:
+        // он сможет переподключиться по токену и продолжить игру.
         p.ws = null;
         p.connected = false;
         const opp = g.players[1 - i];
@@ -599,6 +641,27 @@ function handleDisconnect(ws) {
 // ---------------------------------------------------------------------------
 
 const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+
+// Битовые маски кадра WebSocket (RFC 6455)
+const WS_FIN_BIT = 0x80;         // бит 7 байта 0: кадр финальный
+const WS_MASK_BIT = 0x80;        // бит 7 байта 1: данные маскированы
+const WS_OPCODE_MASK = 0x0f;     // младшие 4 бита байта 0 — тип кадра
+const WS_LEN_MASK = 0x7f;        // младшие 7 бит байта 1 — короткая длина
+
+// Типы кадров (opcode)
+const WS_OP_TEXT = 0x1;          // текстовый кадр
+const WS_OP_CLOSE = 0x8;         // закрытие соединения
+const WS_OP_PING = 0x9;          // ping
+const WS_OP_PONG = 0xA;          // pong
+
+// Длины и границы кадра
+const WS_LEN_16BIT = 126;        // маркер: длина в следующих 2 байтах
+const WS_LEN_64BIT = 127;        // маркер: длина в следующих 8 байтах
+const WS_BASE_HEADER_BYTES = 2;  // размер базового заголовка (2 байта)
+const WS_LEN_16BIT_BYTES = 2;    // размер 16-битной расширенной длины
+const WS_LEN_64BIT_BYTES = 8;    // размер 64-битной расширенной длины
+const WS_MASK_KEY_BYTES = 4;     // размер ключа маски
+const WS_MAX_16BIT = 65536;      // 2^16 — граница 16-битной длины
 
 class WS {
   constructor(socket) {
@@ -626,30 +689,36 @@ class WS {
     this._parse();
   }
 
+  // Разбирает накопленные байты на кадры. Кадр = заголовок (2 байта)
+  // + опциональная расширенная длина + опциональный ключ маски + payload.
   _parse() {
-    while (this.buffer.length >= 2) {
+    // Цикл, пока в буфере есть хотя бы базовый заголовок нового кадра.
+    while (this.buffer.length >= WS_BASE_HEADER_BYTES) {
       const b0 = this.buffer[0];
       const b1 = this.buffer[1];
-      const opcode = b0 & 0x0f;
-      const masked = (b1 & 0x80) !== 0;
-      let len = b1 & 0x7f;
-      let offset = 2;
+      const opcode = b0 & WS_OPCODE_MASK;
+      const masked = (b1 & WS_MASK_BIT) !== 0;
+      let len = b1 & WS_LEN_MASK;
+      let offset = WS_BASE_HEADER_BYTES;
 
-      if (len === 126) {
-        if (this.buffer.length < offset + 2) return;
+      // len 126/127 — маркеры, означающие, что реальная длина лежит
+      // в следующих 2 или 8 байтах соответственно.
+      if (len === WS_LEN_16BIT) {
+        if (this.buffer.length < offset + WS_LEN_16BIT_BYTES) return;
         len = this.buffer.readUInt16BE(offset);
-        offset += 2;
-      } else if (len === 127) {
-        if (this.buffer.length < offset + 8) return;
+        offset += WS_LEN_16BIT_BYTES;
+      } else if (len === WS_LEN_64BIT) {
+        if (this.buffer.length < offset + WS_LEN_64BIT_BYTES) return;
         len = Number(this.buffer.readBigUInt64BE(offset));
-        offset += 8;
+        offset += WS_LEN_64BIT_BYTES;
       }
 
+      // Если кадр маскирован (клиент обязан маскировать), читаем 4-байтный ключ.
       let mask = null;
       if (masked) {
-        if (this.buffer.length < offset + 4) return;
-        mask = this.buffer.slice(offset, offset + 4);
-        offset += 4;
+        if (this.buffer.length < offset + WS_MASK_KEY_BYTES) return;
+        mask = this.buffer.slice(offset, offset + WS_MASK_KEY_BYTES);
+        offset += WS_MASK_KEY_BYTES;
       }
 
       if (this.buffer.length < offset + len) return;
@@ -657,45 +726,46 @@ class WS {
       let payload = this.buffer.slice(offset, offset + len);
       if (masked && mask) {
         const un = Buffer.alloc(len);
-        for (let i = 0; i < len; i++) un[i] = payload[i] ^ mask[i % 4];
+        for (let i = 0; i < len; i++) un[i] = payload[i] ^ mask[i % WS_MASK_KEY_BYTES];
         payload = un;
       }
       this.buffer = this.buffer.slice(offset + len);
 
-      if (opcode === 0x1) {
+      if (opcode === WS_OP_TEXT) {
         // текстовый кадр (для наших сообщений фрагментация не используется)
         if (this.onmessage) this.onmessage(payload.toString('utf8'));
-      } else if (opcode === 0x8) {
-        this._sendFrame(payload, 0x8); // close
+      } else if (opcode === WS_OP_CLOSE) {
+        this._sendFrame(payload, WS_OP_CLOSE); // close
         this._closed();
         return;
-      } else if (opcode === 0x9) {
-        this._sendFrame(payload, 0xA); // ping -> pong
+      } else if (opcode === WS_OP_PING) {
+        this._sendFrame(payload, WS_OP_PONG); // ping -> pong
       }
     }
   }
 
+  // Собирает и отправляет кадр. Сервер шлёт кадры без маски, с битом FIN=1.
   _sendFrame(payload, opcode) {
     const len = payload.length;
     let header;
-    if (len < 126) {
-      header = Buffer.from([0x80 | opcode, len]);
-    } else if (len < 65536) {
-      header = Buffer.alloc(4);
-      header[0] = 0x80 | opcode;
-      header[1] = 126;
-      header.writeUInt16BE(len, 2);
+    if (len < WS_LEN_16BIT) {
+      header = Buffer.from([WS_FIN_BIT | opcode, len]);
+    } else if (len < WS_MAX_16BIT) {
+      header = Buffer.alloc(WS_BASE_HEADER_BYTES + WS_LEN_16BIT_BYTES);
+      header[0] = WS_FIN_BIT | opcode;
+      header[1] = WS_LEN_16BIT;
+      header.writeUInt16BE(len, WS_BASE_HEADER_BYTES);
     } else {
-      header = Buffer.alloc(10);
-      header[0] = 0x80 | opcode;
-      header[1] = 127;
-      header.writeBigUInt64BE(BigInt(len), 2);
+      header = Buffer.alloc(WS_BASE_HEADER_BYTES + WS_LEN_64BIT_BYTES);
+      header[0] = WS_FIN_BIT | opcode;
+      header[1] = WS_LEN_64BIT;
+      header.writeBigUInt64BE(BigInt(len), WS_BASE_HEADER_BYTES);
     }
     this.socket.write(Buffer.concat([header, payload]));
   }
 
   send(text) {
-    this._sendFrame(Buffer.from(text, 'utf8'), 0x1);
+    this._sendFrame(Buffer.from(text, 'utf8'), WS_OP_TEXT);
   }
 }
 
