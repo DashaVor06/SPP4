@@ -343,6 +343,13 @@ function findPlayerByWs(ws) {
   return null;
 }
 
+// Определяет, один ли это человек: авторизованных сравниваем по логину,
+// а если кто-то играет гостем — по идентификатору браузера.
+function isSamePerson(a, b) {
+  if (a.authUsername && b.authUsername) return a.authUsername === b.authUsername;
+  return Boolean(a.clientId && b.clientId && a.clientId === b.clientId);
+}
+
 // Отправляет JSON-сообщение конкретному игроку партии (если он подключён).
 function sendToPlayer(game, idx, obj) {
   const p = game.players[idx];
@@ -446,6 +453,7 @@ function sendAllState(game) {
 function onJoin(ws, msg) {
   const token = msg.token || null;
   const authUsername = (msg.authToken && sessions.get(msg.authToken)) || null;
+  const clientId = msg.clientId || null; // id браузера — чтобы не играть с самим собой
   // Игрок, прошедший авторизацию, выступает под своим логином.
   const name = authUsername || String(msg.name || 'Игрок').slice(0, MAX_NAME_LENGTH) || 'Игрок';
 
@@ -462,6 +470,7 @@ function onJoin(ws, msg) {
       player.ws = ws;
       player.connected = true;
       if (authUsername) player.authUsername = authUsername;
+      if (msg.clientId) player.clientId = msg.clientId;
       if (msg.name || authUsername) player.name = name;
       ws.send(JSON.stringify({ type: 'joined', token: player.token, playerId: player.id }));
       if (game.status === 'waiting') {
@@ -481,6 +490,7 @@ function onJoin(ws, msg) {
     token: (crypto.randomUUID && crypto.randomUUID()) || String(Math.random() + Date.now()),
     name,
     authUsername,
+    clientId,
     ws,
     connected: true,
     grid: null,
@@ -492,6 +502,8 @@ function onJoin(ws, msg) {
   let game = null;
   for (const g of Object.values(state.games)) {
     if (g.status === 'waiting' && g.players.length === 1 && g.players[0].connected) {
+      // Не даём человеку играть с самим собой (по аккаунту, а для гостей — по браузеру).
+      if (isSamePerson(player, g.players[0])) continue;
       game = g;
       break;
     }

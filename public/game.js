@@ -13,6 +13,13 @@ let gameToken = sessionStorage.getItem('bs_token') || null;
 // Токен авторизации и логин — в localStorage (общие для всех вкладок).
 let authToken = localStorage.getItem('bs_auth') || null;
 let authUser = localStorage.getItem('bs_user') || null;
+// Идентификатор браузера (общий для всех вкладок) — чтобы не играть с самим собой.
+let clientId = localStorage.getItem('bs_client') || null;
+if (!clientId) {
+  clientId = (crypto.randomUUID && crypto.randomUUID()) ||
+    (Math.random().toString(36).slice(2) + Date.now().toString(36));
+  localStorage.setItem('bs_client', clientId);
+}
 let state = null;
 let myIndex = 0;
 let reconnectTimer = null;
@@ -103,7 +110,7 @@ function joinGame() {
     pendingJoin = false;
     const name = authUser || nameInput.value.trim() || 'Игрок';
     localStorage.setItem('bs_name', name);
-    send({ type: 'join', name, token: gameToken, authToken });
+    send({ type: 'join', name, token: gameToken, authToken, clientId });
   } else {
     pendingJoin = true;
   }
