@@ -20,6 +20,7 @@ const path = require('path');
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const SAVE_FILE = path.join(__dirname, 'games.json');
+const USERS_FILE = path.join(__dirname, 'users.json');
 
 // ---------------------------------------------------------------------------
 // Игровые константы
@@ -82,6 +83,139 @@ function saveState() {
     fs.writeFileSync(SAVE_FILE, JSON.stringify({ games: savable }, null, 2));
   } catch (e) {
     console.error('[persist] Ошибка сохранения:', e.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Пользователи, авторизация и таблица результатов
+// ---------------------------------------------------------------------------
+
+// users: username -> { salt, hash, results: [{ opponent, result, date }] }
+const users = {};
+// authToken -> username (сессии живут в памяти; пользователи и результаты — на диске)
+const sessions = new Map();
+
+function loadUsers() {
+  try {
+    const data = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+    for (const [name, u] of Object.entries(data)) users[name] = u;
+    console.log(`[auth] Загружено пользователей: ${Object.keys(users).length}`);
+  } catch (e) {
+    // файла нет — начнём с пустого списка
+  }
+}
+
+function saveUsers() {
+  try {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+  } catch (e) {
+    console.error('[auth] Ошибка сохранения пользователей:', e.message);
+  }
+}
+
+// Хеширование пароля: scrypt с солью (встроенный модуль crypto).
+function hashPassword(password, salt) {
+  return crypto.scryptSync(String(password), salt, 64).toString('hex');
+}
+
+function issueToken(username) {
+  const token = (crypto.randomUUID && crypto.randomUUID()) || crypto.randomBytes(16).toString('hex');
+  sessions.set(token, username);
+  return token;
+}
+
+function authPayload(username) {
+  const u = users[username] || { results: [] };
+  return { type: 'auth', ok: true, username, authToken: issueToken(username), results: u.results || [] };
+}
+
+function onRegister(ws, msg) {
+  const username = String(msg.username || '').trim();
+  const password = String(msg.password || '');
+  if (!/^[a-zA-Zа-яА-Я0-9_-]{3,20}$/.test(username)) {
+    ws.send(JSON.stringify({ type: 'auth', ok: false, error: 'Логин: 3–20 символов (буквы, цифры, «_», «-»).' }));
+    return;
+  }
+  if (password.length < 4) {
+    ws.send(JSON.stringify({ type: 'auth', ok: false, error: 'Пароль должен быть не короче 4 символов.' }));
+    return;
+  }
+  if (users[username]) {
+    ws.send(JSON.stringify({ type: 'auth', ok: false, error: 'Такой логин уже занят.' }));
+    return;
+  }
+  const salt = crypto.randomBytes(16).toString('hex');
+  users[username] = { salt, hash: hashPassword(password, salt), results: [] };
+  saveUsers();
+  ws.send(JSON.stringify(authPayload(username)));
+}
+
+function onLogin(ws, msg) {
+  const username = String(msg.username || '').trim();
+  const password = String(msg.password || '');
+  const u = users[username];
+  if (!u) {
+    ws.send(JSON.stringify({ type: 'auth', ok: false, error: 'Пользователь не найден.' }));
+    return;
+  }
+  const expected = Buffer.from(u.hash, 'hex');
+  const actual = Buffer.from(hashPassword(password, u.salt), 'hex');
+  if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+    ws.send(JSON.stringify({ type: 'auth', ok: false, error: 'Неверный пароль.' }));
+    return;
+  }
+  ws.send(JSON.stringify(authPayload(username)));
+}
+
+function onRestore(ws, msg) {
+  const username = sessions.get(msg.authToken);
+  if (!username) {
+    ws.send(JSON.stringify({ type: 'auth', ok: false, error: 'Сессия истекла, войдите заново.' }));
+    return;
+  }
+  ws.send(JSON.stringify(authPayload(username)));
+}
+
+function onLogout(ws, msg) {
+  sessions.delete(msg.authToken);
+}
+
+function onResults(ws, msg) {
+  const username = sessions.get(msg.authToken);
+  if (!username) {
+    ws.send(JSON.stringify({ type: 'auth', ok: false, error: 'Сессия истекла, войдите заново.' }));
+    return;
+  }
+  sendResults(ws, username);
+}
+
+function sendResults(ws, username) {
+  const u = users[username];
+  ws.send(JSON.stringify({ type: 'results', results: (u && u.results) || [] }));
+}
+
+// Записывает результат завершённой партии в таблицы обоих игроков.
+function recordResult(game) {
+  if (game.winner === null) return;
+  for (let i = 0; i < game.players.length; i++) {
+    const p = game.players[i];
+    if (!p.authUsername) continue; // играл как гость
+    const u = users[p.authUsername];
+    if (!u) continue;
+    if (!u.results) u.results = [];
+    u.results.push({
+      opponent: game.players[1 - i].name,
+      result: i === game.winner ? 'win' : 'loss',
+      date: Date.now(),
+    });
+  }
+  saveUsers();
+}
+
+// Рассылает обновлённую таблицу результатов авторизованным участникам.
+function broadcastResults(game) {
+  for (const p of game.players) {
+    if (p.authUsername && p.ws) sendResults(p.ws, p.authUsername);
   }
 }
 
@@ -258,8 +392,10 @@ function sendAllState(game) {
 // ---------------------------------------------------------------------------
 
 function onJoin(ws, msg) {
-  const name = String(msg.name || 'Игрок').slice(0, 20) || 'Игрок';
   const token = msg.token || null;
+  const authUsername = (msg.authToken && sessions.get(msg.authToken)) || null;
+  // Игрок, прошедший авторизацию, выступает под своим логином.
+  const name = authUsername || String(msg.name || 'Игрок').slice(0, 20) || 'Игрок';
 
   // 1) Попытка восстановить игрока по токену (переподключение).
   if (token) {
@@ -273,7 +409,8 @@ function onJoin(ws, msg) {
       }
       player.ws = ws;
       player.connected = true;
-      if (msg.name) player.name = name;
+      if (authUsername) player.authUsername = authUsername;
+      if (msg.name || authUsername) player.name = name;
       ws.send(JSON.stringify({ type: 'joined', token: player.token, playerId: player.id }));
       if (game.status === 'waiting') {
         // соперник ещё не пришёл — снова ждём
@@ -291,6 +428,7 @@ function onJoin(ws, msg) {
     id: (crypto.randomUUID && crypto.randomUUID()) || String(Date.now() + Math.random()),
     token: (crypto.randomUUID && crypto.randomUUID()) || String(Math.random() + Date.now()),
     name,
+    authUsername,
     ws,
     connected: true,
     grid: null,
@@ -391,6 +529,7 @@ function onShoot(ws, msg) {
   if (opp.ships.every((s) => s.hits >= s.size)) {
     game.status = 'finished';
     game.winner = idx;
+    recordResult(game); // записать результат в таблицы авторизованных игроков
   }
 
   game.updatedAt = Date.now();
@@ -399,6 +538,7 @@ function onShoot(ws, msg) {
   sendToPlayer(game, idx, { type: 'event', text: evShooter });
   sendToPlayer(game, 1 - idx, { type: 'event', text: evOpp });
   sendAllState(game);
+  if (game.status === 'finished') broadcastResults(game); // обновить таблицы результатов
 }
 
 function onRestart(ws) {
@@ -424,6 +564,11 @@ function handleMessage(ws, raw) {
     case 'join': return onJoin(ws, msg);
     case 'shoot': return onShoot(ws, msg);
     case 'restart': return onRestart(ws);
+    case 'register': return onRegister(ws, msg);
+    case 'login': return onLogin(ws, msg);
+    case 'restore': return onRestore(ws, msg);
+    case 'logout': return onLogout(ws, msg);
+    case 'results': return onResults(ws, msg);
     default: return;
   }
 }
@@ -626,6 +771,7 @@ server.on('upgrade', (req, socket, head) => {
 // ---------------------------------------------------------------------------
 
 loadState();
+loadUsers();
 server.listen(PORT, () => {
   console.log(`Морской бой запущен: http://localhost:${PORT}`);
   console.log('Откройте адрес в двух вкладках, чтобы сыграть вдвоём.');

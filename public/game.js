@@ -5,14 +5,16 @@
 const LETTERS = 'АБВГДЕЖИК'.split('');
 
 let ws = null;
-// Токен храним в sessionStorage: у каждой вкладки он свой (иначе две вкладки
-// с одним токеном из localStorage «дерутся» за одного игрока и бесконечно
-// переподключаются). При этом sessionStorage переживает обновление страницы (F5),
-// поэтому восстановление после обрыва связи в пределах вкладки работает.
-let token = sessionStorage.getItem('bs_token') || null;
+// Игровой токен — в sessionStorage (свой у каждой вкладки).
+let gameToken = sessionStorage.getItem('bs_token') || null;
+// Токен авторизации и логин — в localStorage (общие для всех вкладок).
+let authToken = localStorage.getItem('bs_auth') || null;
+let authUser = localStorage.getItem('bs_user') || null;
 let state = null;
 let myIndex = 0;
 let reconnectTimer = null;
+let pendingJoin = false;
+let restoringSession = false;
 
 const $ = (id) => document.getElementById(id);
 const nameInput = $('nameInput');
@@ -30,6 +32,20 @@ const yourShipsEl = $('yourShips');
 const enemyShipsEl = $('enemyShips');
 const logEl = $('log');
 
+const authForm = $('authForm');
+const authInfo = $('authInfo');
+const authUserEl = $('authUser');
+const authStatusEl = $('authStatus');
+const usernameInput = $('usernameInput');
+const passwordInput = $('passwordInput');
+const loginBtn = $('loginBtn');
+const registerBtn = $('registerBtn');
+const logoutBtn = $('logoutBtn');
+const resultsPanel = $('resultsPanel');
+const resultsSummary = $('resultsSummary');
+const resultsTableBody = document.querySelector('#resultsTable tbody');
+const resultsEmpty = $('resultsEmpty');
+
 nameInput.value = localStorage.getItem('bs_name') || '';
 
 function connect() {
@@ -39,11 +55,12 @@ function connect() {
 
   ws.onopen = () => {
     setConnStatus('Подключено');
-    send({
-      type: 'join',
-      name: nameInput.value.trim() || 'Игрок',
-      token: token,
-    });
+    if (authToken) {
+      restoringSession = true;
+      send({ type: 'restore', authToken }); // восстановить сессию и результаты
+    }
+    if (pendingJoin || gameToken) joinGame(); // автоподключение к игре
+    updateAuthUI();
   };
 
   ws.onmessage = (e) => {
@@ -69,11 +86,96 @@ function setConnStatus(text) {
   connStatus.classList.toggle('muted', false);
 }
 
+function setAuthStatus(text) {
+  authStatusEl.textContent = text;
+}
+
+function joinGame() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    pendingJoin = false;
+    const name = authUser || nameInput.value.trim() || 'Игрок';
+    localStorage.setItem('bs_name', name);
+    send({ type: 'join', name, token: gameToken, authToken });
+  } else {
+    pendingJoin = true;
+  }
+}
+
+function updateAuthUI() {
+  const loggedIn = !!authUser;
+  authForm.classList.toggle('hidden', loggedIn);
+  authInfo.classList.toggle('hidden', !loggedIn);
+  resultsPanel.classList.toggle('hidden', !loggedIn);
+  authUserEl.textContent = authUser || '';
+  if (loggedIn) {
+    nameInput.value = authUser;
+    nameInput.disabled = true; // авторизованный игрок выступает под логином
+  } else {
+    nameInput.disabled = false;
+  }
+}
+
+function renderResults(results) {
+  resultsTableBody.innerHTML = '';
+  if (!results || results.length === 0) {
+    resultsSummary.innerHTML = '';
+    resultsEmpty.classList.remove('hidden');
+    return;
+  }
+  resultsEmpty.classList.add('hidden');
+  const wins = results.filter((r) => r.result === 'win').length;
+  const losses = results.length - wins;
+  resultsSummary.innerHTML =
+    `Всего партий: <b>${results.length}</b> · Побед: <b>${wins}</b> · Поражений: <b>${losses}</b>`;
+
+  results.slice().reverse().slice(0, 20).forEach((r, i) => {
+    const tr = document.createElement('tr');
+    const tdN = document.createElement('td');
+    tdN.textContent = i + 1;
+    const tdD = document.createElement('td');
+    tdD.textContent = new Date(r.date).toLocaleString('ru-RU');
+    const tdO = document.createElement('td');
+    tdO.textContent = r.opponent;
+    const tdR = document.createElement('td');
+    tdR.textContent = r.result === 'win' ? 'Победа' : 'Поражение';
+    tdR.className = r.result === 'win' ? 'resWin' : 'resLoss';
+    tr.append(tdN, tdD, tdO, tdR);
+    resultsTableBody.appendChild(tr);
+  });
+}
+
 function handle(msg) {
   switch (msg.type) {
+    case 'auth':
+      if (msg.ok) {
+        authToken = msg.authToken;
+        authUser = msg.username;
+        localStorage.setItem('bs_auth', authToken);
+        localStorage.setItem('bs_user', authUser);
+        nameInput.value = authUser;
+        setAuthStatus('');
+        renderResults(msg.results || []);
+      } else {
+        if (restoringSession) {
+          // сессия истекла — показываем форму входа
+          authToken = null;
+          authUser = null;
+          localStorage.removeItem('bs_auth');
+          localStorage.removeItem('bs_user');
+        }
+        setAuthStatus(msg.error || 'Ошибка авторизации.');
+      }
+      restoringSession = false;
+      updateAuthUI();
+      break;
+
+    case 'results':
+      renderResults(msg.results || []);
+      break;
+
     case 'joined':
-      token = msg.token;
-      sessionStorage.setItem('bs_token', token);
+      gameToken = msg.token;
+      sessionStorage.setItem('bs_token', gameToken);
       break;
 
     case 'waiting':
@@ -156,10 +258,10 @@ function renderBoard(container, cells, kind, clickable) {
 
       if (kind === 'your') {
         if (cell.sunk) {
-          el.classList.add('sunk'); // полностью потопленный корабль — синий
+          el.classList.add('sunk'); // полностью потопленный корабль
         } else if (cell.ship) {
-          el.classList.add('ship'); // живой корабль — серый
-          if (cell.shot === 'hit') el.classList.add('hit'); // подбитая палуба — красный
+          el.classList.add('ship'); // живой корабль
+          if (cell.shot === 'hit') el.classList.add('hit'); // подбитая палуба
         }
         if (!cell.ship && cell.shot === 'miss') el.classList.add('miss');
       } else {
@@ -190,14 +292,35 @@ function addLog(text, win) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-connectBtn.addEventListener('click', () => {
-  localStorage.setItem('bs_name', nameInput.value.trim() || 'Игрок');
-  connect();
-});
+connectBtn.addEventListener('click', joinGame);
 
 restartBtn.addEventListener('click', () => {
   send({ type: 'restart' });
 });
 
-// Автоподключение, если у пользователя уже был токен.
-if (token) connect();
+loginBtn.addEventListener('click', () => {
+  const username = usernameInput.value.trim();
+  const password = passwordInput.value;
+  if (!username || !password) { setAuthStatus('Введите логин и пароль.'); return; }
+  send({ type: 'login', username, password });
+});
+
+registerBtn.addEventListener('click', () => {
+  const username = usernameInput.value.trim();
+  const password = passwordInput.value;
+  if (!username || !password) { setAuthStatus('Введите логин и пароль.'); return; }
+  send({ type: 'register', username, password });
+});
+
+logoutBtn.addEventListener('click', () => {
+  if (authToken) send({ type: 'logout', authToken });
+  authToken = null;
+  authUser = null;
+  localStorage.removeItem('bs_auth');
+  localStorage.removeItem('bs_user');
+  updateAuthUI();
+});
+
+// Сразу отражаем сохранённый вход (если есть), затем подключаем WebSocket.
+updateAuthUI();
+connect();

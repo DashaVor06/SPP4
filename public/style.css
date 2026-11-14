@@ -125,3 +125,49 @@ button:active { transform: translateY(1px); }
 }
 .log div { padding: 1px 0; }
 .log .win { color: var(--accent); font-weight: 700; }
+
+/* Авторизация и таблица результатов */
+#authPanel h3, #resultsPanel h3 { margin: 0 0 10px; }
+.authRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 8px;
+}
+#usernameInput, #passwordInput {
+  flex: 1;
+  min-width: 140px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid #3c6a91;
+  background: #0e2b40;
+  color: var(--text);
+  font-size: 15px;
+}
+#nameInput:disabled { opacity: 0.6; }
+button.secondary {
+  background: #2c5d84;
+  color: var(--text);
+}
+#authInfo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 15px;
+}
+.resultsSummary { margin-bottom: 10px; color: #bcd4e6; }
+#resultsTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+#resultsTable th, #resultsTable td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid #234a68;
+}
+#resultsTable th { color: #9db8cf; font-weight: 600; }
+.resWin { color: #4ade80; font-weight: 700; }
+.resLoss { color: #f87171; font-weight: 700; }
+#resultsEmpty { margin-top: 8px; }

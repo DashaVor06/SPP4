@@ -13,6 +13,35 @@
       <p class="subtitle">многопользовательская игра в реальном времени (WebSockets)</p>
     </header>
 
+    <section id="authPanel" class="panel">
+      <h3>Авторизация</h3>
+      <div id="authForm">
+        <div class="authRow">
+          <input id="usernameInput" type="text" maxlength="20" placeholder="Логин" autocomplete="off">
+          <input id="passwordInput" type="password" maxlength="64" placeholder="Пароль" autocomplete="off">
+          <button id="loginBtn">Войти</button>
+          <button id="registerBtn" class="secondary">Регистрация</button>
+        </div>
+        <p id="authStatus" class="status muted"></p>
+      </div>
+      <div id="authInfo" class="hidden">
+        <span>Вы вошли как <b id="authUser"></b></span>
+        <button id="logoutBtn" class="secondary">Выйти</button>
+      </div>
+    </section>
+
+    <section id="resultsPanel" class="panel hidden">
+      <h3>Ваши результаты</h3>
+      <div id="resultsSummary" class="resultsSummary"></div>
+      <table id="resultsTable">
+        <thead>
+          <tr><th>#</th><th>Дата</th><th>Соперник</th><th>Результат</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p id="resultsEmpty" class="muted hidden">Пока нет сыгранных партий.</p>
+    </section>
+
     <section id="connectPanel" class="panel">
       <label for="nameInput">Ваше имя:</label>
       <input id="nameInput" type="text" maxlength="20" placeholder="Игрок" autocomplete="off">
